@@ -1,0 +1,161 @@
+{% extends "base.html" %} {% block content %}
+
+<!-- Include Bootstrap CSS (if not already in base.html) -->
+<link
+  href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+  rel="stylesheet"
+/>
+
+<!-- cm-chessboard CSS -->
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/chessboard.css"
+/>
+
+<div
+  class="container d-flex justify-content-center align-items-center min-vh-100"
+>
+  <div class="card shadow p-4" style="max-width: 480px; width: 100%">
+    <div class="card-body text-center">
+      <h5 class="card-title mb-4">Chess Predictor</h5>
+      <!-- Chessboard -->
+      <div id="board" class="mx-auto mb-3" style="max-width: 400px"></div>
+    </div>
+  </div>
+
+  <div class="card shadow p-4 ms-5" style="max-width: 480px; width: 100%">
+    <div class="card-body text-center">
+      <!-- Info Section with improved readability -->
+      <div
+        id="info"
+        class="alert alert-info p-3 mb-4"
+        style="font-size: 1.1rem; line-height: 1.4; text-align: left"
+      >
+        Move a piece to start predicting
+      </div>
+    </div>
+
+    <!-- Move History Section -->
+    <div
+      class="card shadow p-4 ms-3 text-center"
+      style="max-width: 300px; width: 100%"
+    >
+      <h4 class="text-center">Move History</h4>
+      <ul id="move-list" class="list-group list-group-flush text-start"></ul>
+    </div>
+  </div>
+</div>
+
+<!-- main chess module -->
+<script type="module">
+  import {
+    Chessboard,
+    INPUT_EVENT_TYPE,
+    FEN,
+  } from "https://cdn.jsdelivr.net/npm/cm-chessboard@8/src/Chessboard.js";
+
+  const boardElement = document.getElementById("board");
+  const info = document.getElementById("info");
+  const moveList = document.getElementById("move-list");
+  const game = new Chess(); // Initialize chess game
+
+  // Initialize chessboard
+  const board = new Chessboard(boardElement, {
+    position: FEN.start,
+    assetsUrl: "https://cdn.jsdelivr.net/npm/cm-chessboard@8/assets/",
+    style: { pieces: { type: "svg" } },
+  });
+
+  async function sendBoardStateForPrediction(fen) {
+    try {
+      const response = await fetch("/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ moves: fen }),
+      });
+
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`);
+
+      const predictionResult = await response.json();
+      const predictedWinnerNumber = predictionResult["predicted winner"];
+      const probabilities = predictionResult["probabilities"];
+
+      // Get predicted winner and probabilities
+      let predictedWinnerName = "Unknown";
+      for (const key in probabilities) {
+        if (key.startsWith(`${predictedWinnerNumber} = `)) {
+          predictedWinnerName = key.split(" = ")[1];
+          break;
+        }
+      }
+
+      const probBlack = (probabilities?.["0 = Black"] ?? 0).toFixed(2);
+      const probDraw = (probabilities?.["1 = Draw"] ?? 0).toFixed(2);
+      const probWhite = (probabilities?.["2 = White"] ?? 0).toFixed(2);
+
+      const lastMove = game.history({ verbose: true }).pop()?.san || "N/A";
+
+      info.className = "alert alert-success p-3 mb-4";
+      info.style.fontSize = "1.1rem";
+      info.innerHTML = `
+        <div class="d-flex justify-content-between">
+          <span><strong>Move:</strong> ${lastMove}</span>
+          <span><strong>Predicted Winner:</strong> ${predictedWinnerName}</span>
+        </div>
+        <div class="mt-3">
+          <strong>Probabilities:</strong>
+          <div> Black: ${probBlack} %</div>
+          <div> Draw: ${probDraw} %</div>
+          <div> White: ${probWhite} %</div>
+        </div>
+      `;
+    } catch (error) {
+      console.error("Prediction error:", error);
+      const lastMove = game.history({ verbose: true }).pop()?.san || "N/A";
+      info.className = "alert alert-danger p-3 mb-4";
+      info.style.fontSize = "1.1rem";
+      info.textContent = `Move: ${lastMove}. Error getting prediction.`;
+    }
+  }
+
+  function updateMoveHistory() {
+    moveList.innerHTML = "";
+    game.history().forEach((move, index) => {
+      const li = document.createElement("li");
+      li.className = "list-group-item";
+      li.textContent = `${index + 1}. ${move}`;
+      moveList.appendChild(li);
+    });
+  }
+
+  function inputHandler(event) {
+    if (event.type === INPUT_EVENT_TYPE.validateMoveInput) {
+      const move = {
+        from: event.squareFrom,
+        to: event.squareTo,
+        promotion: "q", // Always promote to a queen
+      };
+
+      const result = game.move(move);
+      if (!result) {
+        info.className = "alert alert-warning p-3 mb-4";
+        info.style.fontSize = "1.1rem";
+        info.textContent = `Illegal move: ${move.from} → ${move.to}`;
+        return false;
+      }
+
+      const currentFen = game.fen();
+      sendBoardStateForPrediction(currentFen); // Send FEN to backend for prediction
+      board.setPosition(currentFen); // Update board position
+      updateMoveHistory(); // Update the move history
+      return true;
+    }
+    return true;
+  }
+
+  // Enable move input on the board
+  board.enableMoveInput(inputHandler);
+</script>
+
+{% endblock %}
